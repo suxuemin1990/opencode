@@ -192,40 +192,75 @@ const supportsImage = (capabilities: Model.Capabilities) =>
 
 // When the current model cannot read images, persist each image to the project
 // cache and replace it with a reference the model can act on via describe_image.
-const offloadImages = (
+// This covers both user-attached media and images a tool returned in its result,
+// so a text-only model can still inspect, say, an MCP screenshot by handle.
+export const offloadImages = (
   messages: LLMRequest["messages"],
   capabilities: Model.Capabilities,
   projectDirectory: string,
 ) =>
   Effect.gen(function* () {
     if (supportsImage(capabilities)) return messages
+    // Collect every inline image — from user media parts and tool-result files —
+    // in traversal order. Handles are produced in the same order and matched back
+    // by index, so the reference text lands exactly where the image was.
     const mediaItems: Array<{ bytes: Uint8Array; mime: string; name: string | undefined }> = []
     for (const message of messages) {
       for (const part of message.content) {
-        if (part.type !== "media") continue
-        if (!part.media.mediaType.toLowerCase().startsWith("image/")) continue
-        const inline = part.media.inline()
-        if (!inline) continue
-        mediaItems.push({ bytes: new Uint8Array(Buffer.from(inline.base64, "base64")), mime: inline.mime, name: part.filename })
+        if (part.type === "media") {
+          if (!part.media.mediaType.toLowerCase().startsWith("image/")) continue
+          const inline = part.media.inline()
+          if (!inline) continue
+          mediaItems.push({
+            bytes: new Uint8Array(Buffer.from(inline.base64, "base64")),
+            mime: inline.mime,
+            name: part.filename,
+          })
+          continue
+        }
+        if (part.type !== "tool-result" || part.result.type !== "content") continue
+        for (const item of part.result.value) {
+          if (item.type !== "file" || !item.mime.toLowerCase().startsWith("image/")) continue
+          const base64 = /^data:[^,]*;base64,(.*)$/s.exec(item.uri)?.[1]
+          if (base64 === undefined) continue
+          mediaItems.push({
+            bytes: new Uint8Array(Buffer.from(base64, "base64")),
+            mime: item.mime,
+            name: item.name,
+          })
+        }
       }
     }
     if (mediaItems.length === 0) return messages
     const handles = yield* Effect.forEach(mediaItems, (item) =>
       storeImage({ projectDirectory, mime: item.mime, bytes: item.bytes }),
     )
+    // Replace each collected image in traversal order with its stored handle.
+    // The guard below matches the collection loop exactly, so the nth image
+    // consumes the nth handle and non-images pass through untouched.
     let index = 0
     return messages.map((message) => {
       const content = message.content.map((part) => {
-        if (part.type !== "media" || !part.media.mediaType.toLowerCase().startsWith("image/")) return part
-        if (!part.media.inline()) return part
-        const handle = handles[index]
-        index += 1
-        if (!handle) return part
-        return Message.text(describeReference(handle, part.filename ?? "image"))
+        if (part.type === "media") {
+          if (!part.media.mediaType.toLowerCase().startsWith("image/")) return part
+          if (!part.media.inline()) return part
+          const handle = handles[index]
+          index += 1
+          return handle ? Message.text(describeReference(handle, part.filename ?? "image")) : part
+        }
+        if (part.type !== "tool-result" || part.result.type !== "content") return part
+        const result = part.result
+        const value = result.value.map((item): Content => {
+          if (item.type !== "file" || !item.mime.toLowerCase().startsWith("image/")) return item
+          const base64 = /^data:[^,]*;base64,(.*)$/s.exec(item.uri)?.[1]
+          if (base64 === undefined) return item
+          const handle = handles[index]
+          index += 1
+          return handle ? { type: "text", text: describeReference(handle, item.name ?? "image") } : item
+        })
+        return value.every((item, i) => item === result.value[i]) ? part : { ...part, result: { ...result, value } }
       })
-      return content.every((part, i) => part === message.content[i])
-        ? message
-        : new Message({ ...message, content })
+      return content.every((part, i) => part === message.content[i]) ? message : new Message({ ...message, content })
     })
   })
 

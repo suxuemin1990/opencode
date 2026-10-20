@@ -9,6 +9,7 @@ import { Context, Effect, Scope } from "effect"
 import { HttpClient } from "effect/http"
 import { Agent } from "../agent.js"
 import { Model } from "../model.js"
+import { ModelResolver } from "../model-resolver.js"
 import { Provider } from "../provider.js"
 import { Command } from "../command.js"
 import { Config } from "../config.js"
@@ -79,6 +80,7 @@ import { ReadToolFileSystem } from "../tool/read-filesystem.js"
 import { ReadTool } from "../tool/plugin/read.js"
 import { ShellTool } from "../tool/plugin/shell.js"
 import { SkillTool } from "../tool/plugin/skill.js"
+import { DescribeImageTool } from "../tool/plugin/describe-image.js"
 import { SubagentTool } from "../tool/plugin/subagent.js"
 import { TodoTool } from "../tool/plugin/todo.js"
 import { Tool } from "../tool.js"
@@ -111,6 +113,7 @@ const services = [
   AppProcess.Service,
   Provider.Service,
   Model.Service,
+  ModelResolver.Service,
   Command.Service,
   Config.Service,
   Credential.Service,
@@ -165,6 +168,7 @@ export const requirements = LayerNode.group([
   AppProcess.node,
   Provider.node,
   Model.node,
+  ModelResolver.node,
   Command.node,
   Config.node,
   Credential.node,
@@ -241,6 +245,7 @@ const pre = [
   McpResourceTools.Plugin,
   QuestionTool.Plugin,
   ReadTool.Plugin,
+  DescribeImageTool.Plugin,
   ShellTool.Plugin,
   SkillTool.Plugin,
   SubagentTool.Plugin,

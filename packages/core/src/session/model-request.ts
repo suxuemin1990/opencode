@@ -37,6 +37,7 @@ import { SessionProviderContext } from "./provider-context.js"
 import { SessionRunnerModel } from "./runner/model.js"
 import { SessionSchema } from "./schema.js"
 import { SessionSystemPrompt } from "./system-prompt.js"
+import { describeReference, storeImage } from "./media-store.js"
 import { toLLMMessages } from "./runner/to-llm-message.js"
 import type { SessionMessage } from "./message.js"
 
@@ -186,6 +187,48 @@ export const unsupportedParts = (
   provider?: string,
 ) => replaceMedia(messages, (media) => unsupportedMedia(media.mime, media.name, capabilities, provider))
 
+const supportsImage = (capabilities: Model.Capabilities) =>
+  capabilities.input.some((item) => item.startsWith("image"))
+
+// When the current model cannot read images, persist each image to the project
+// cache and replace it with a reference the model can act on via describe_image.
+const offloadImages = (
+  messages: LLMRequest["messages"],
+  capabilities: Model.Capabilities,
+  projectDirectory: string,
+) =>
+  Effect.gen(function* () {
+    if (supportsImage(capabilities)) return messages
+    const mediaItems: Array<{ bytes: Uint8Array; mime: string; name: string | undefined }> = []
+    for (const message of messages) {
+      for (const part of message.content) {
+        if (part.type !== "media") continue
+        if (!part.media.mediaType.toLowerCase().startsWith("image/")) continue
+        const inline = part.media.inline()
+        if (!inline) continue
+        mediaItems.push({ bytes: new Uint8Array(Buffer.from(inline.base64, "base64")), mime: inline.mime, name: part.filename })
+      }
+    }
+    if (mediaItems.length === 0) return messages
+    const handles = yield* Effect.forEach(mediaItems, (item) =>
+      storeImage({ projectDirectory, mime: item.mime, bytes: item.bytes }),
+    )
+    let index = 0
+    return messages.map((message) => {
+      const content = message.content.map((part) => {
+        if (part.type !== "media" || !part.media.mediaType.toLowerCase().startsWith("image/")) return part
+        if (!part.media.inline()) return part
+        const handle = handles[index]
+        index += 1
+        if (!handle) return part
+        return Message.text(describeReference(handle, part.filename ?? "image"))
+      })
+      return content.every((part, i) => part === message.content[i])
+        ? message
+        : new Message({ ...message, content })
+    })
+  })
+
 export const boundImages = (messages: LLMRequest["messages"]) => {
   const isImage = (mime: string) => mime.toLowerCase().startsWith("image/")
   const sizes = messages.flatMap((message) =>
@@ -277,6 +320,7 @@ export const layer = Layer.effect(
       const generation = Object.fromEntries(entries.filter(([k]) => GENERATION_KEYS.has(k))) as GenerationOptionsFields
       const providerOptions = Object.fromEntries(entries.filter(([k]) => !GENERATION_KEYS.has(k)))
       const affinity = SessionAffinity.get(session)
+      const messages = yield* offloadImages(shaped.messages, model.capabilities, session.location.directory)
       const base = LLM.request({
         model: model.model,
         http: {
@@ -295,7 +339,7 @@ export const layer = Layer.effect(
         // TODO: Persist cache lineage so nested forks reuse the root session's cache key.
         promptCacheKey: /^ses_[0-9a-f]{64}$/.test(affinity) ? affinity.slice(4) : affinity,
         system: shaped.system,
-        messages: boundImages(unsupportedParts(shaped.messages, model.capabilities, model.model.provider)),
+        messages: boundImages(unsupportedParts(messages, model.capabilities, model.model.provider)),
         tools: Array.from(hooked, ([name, t]) => ({ ...t, name })),
         toolChoice: input.toolChoice,
         generation: Object.keys(generation).length === 0 ? undefined : generation,

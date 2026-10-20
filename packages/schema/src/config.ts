@@ -33,6 +33,10 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   model: ConfigModel.Selection.pipe(optional).annotate({
     description: "Default model to use when no session or agent model is selected",
   }),
+  image_model: ConfigModel.Selection.pipe(optional).annotate({
+    description:
+      "Model used to describe images for text-only models. When the active model does not support image input, attached images are saved to the project cache and replaced with a media reference the model can query via the describe_image tool.",
+  }),
   default_agent: Schema.String.pipe(optional).annotate({
     description: "Default primary agent to use when no session agent is selected",
   }),

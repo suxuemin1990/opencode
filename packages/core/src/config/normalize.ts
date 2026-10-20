@@ -203,6 +203,11 @@ export function normalize(input: unknown): Result {
     : undefined
   if (model) encoded.model = { ...model, providerID: ConfigMigrateV1.providerID(model.providerID) }
 
+  const imageModel = own(input, "image_model")
+    ? decodeValue(ConfigModel.Selection, input.image_model, ["image_model"], diagnostics)
+    : undefined
+  if (imageModel) encoded.image_model = { ...imageModel, providerID: ConfigMigrateV1.providerID(imageModel.providerID) }
+
   const nativeAtomic = {
     $schema: Info.fields.$schema,
     shell: Info.fields.shell,

@@ -1,7 +1,7 @@
 export * as SessionMediaStore from "./media-store.js"
 
-import { join, dirname } from "path"
-import { mkdir, writeFile } from "fs/promises"
+import { join, dirname, basename } from "path"
+import { mkdir, writeFile, readdir, readFile } from "fs/promises"
 import { Hash } from "@opencode/util/hash"
 import { Effect } from "effect"
 
@@ -17,6 +17,33 @@ export const makeHandle = (value: string) => value as Handle
 
 export const mediaPath = (projectDirectory: string, handle: string) =>
   join(projectDirectory, CACHE_DIRECTORY, handle)
+
+// A model may pass the handle back missing its extension (for example dropping
+// the trailing `.png`), so a straight `readFile(mediaPath(...))` would miss an
+// image that is actually on disk. Handles are content-addressed — the hash body
+// is globally unique — so resolving by hash prefix recovers the real file name
+// without ambiguity. Returns `undefined` when no stored image matches.
+export const resolveFile = async (
+  projectDirectory: string,
+  handle: string,
+): Promise<string | undefined> => {
+  const exact = mediaPath(projectDirectory, handle)
+  try {
+    await readFile(exact)
+    return exact
+  } catch {
+    const dir = mediaPath(projectDirectory, "")
+    let entries: string[]
+    try {
+      entries = await readdir(dir)
+    } catch {
+      return undefined
+    }
+    const stem = `${basename(handle)}.`
+    const match = entries.find((entry) => entry.startsWith(stem))
+    return match === undefined ? undefined : mediaPath(projectDirectory, match)
+  }
+}
 
 // A stable label for the model to reason about a stored image.
 export const describeReference = (handle: string, title: string) =>

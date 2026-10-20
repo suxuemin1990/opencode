@@ -58,7 +58,13 @@ export const Plugin = {
                     (error) => new ToolFailure({ message: `Failed to resolve image_model: ${error.message}` }),
                   ),
                 )
-              const path = SessionMediaStore.mediaPath(ctx.location.directory, input.handle)
+              const path = yield* Effect.promise(() =>
+                SessionMediaStore.resolveFile(ctx.location.directory, input.handle),
+              )
+              if (path === undefined)
+                return yield* new ToolFailure({
+                  message: `Unable to find stored image "${input.handle}".`,
+                })
               const bytes = yield* Effect.tryPromise({
                 try: () => readFile(path),
                 catch: (cause) =>
@@ -77,7 +83,7 @@ export const Plugin = {
                 messages: [
                   Message.user([
                     Message.text(input.question),
-                    Message.media(Media.bytes(new Uint8Array(bytes), detectMime(input.handle))),
+                    Message.media(Media.bytes(new Uint8Array(bytes), detectMime(path))),
                   ]),
                 ],
               })
@@ -94,8 +100,8 @@ export const Plugin = {
   }),
 }
 
-function detectMime(handle: string): string {
-  const lower = handle.toLowerCase()
+function detectMime(path: string): string {
+  const lower = path.toLowerCase()
   if (lower.endsWith(".png")) return "image/png"
   if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg"
   if (lower.endsWith(".gif")) return "image/gif"
